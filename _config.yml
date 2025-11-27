@@ -1,0 +1,4 @@
+# GitHub Pages 配置
+theme: jekyll-theme-minimal
+title: 托管班管理系统
+show_downloads: true
