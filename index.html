@@ -1217,6 +1217,76 @@
                 };
             }, []);
 
+            // 定期检查日托学生缴费期限，过期自动暂停（每小时执行一次）
+            useEffect(() => {
+                const checkDeadlines = async () => {
+                    try {
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (!user) {
+                            console.error('用户未登录，无法检查缴费期限');
+                            return;
+                        }
+
+                        // 获取所有日托学生
+                        const { data: students, error } = await supabase
+                            .from('students')
+                            .select('*')
+                            .eq('user_id', user.id)
+                            .eq('student_type', '日托');
+
+                        if (error) {
+                            console.error('获取日托学生失败:', error);
+                            return;
+                        }
+
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+
+                        for (const student of students) {
+                            if (student.next_renewal_date) {
+                                const nextRenewalDate = new Date(student.next_renewal_date);
+                                nextRenewalDate.setHours(0, 0, 0, 0);
+
+                                // 如果过了缴费期限且学生状态是在读，自动暂停
+                                if (nextRenewalDate < today && student.status === 'active') {
+                                    console.log(`学生 ${student.name} 缴费期限已过，自动暂停`);
+                                    
+                                    // 更新学生状态为暂停
+                                    const { error: updateError } = await supabase
+                                        .from('students')
+                                        .update({ status: 'suspended' })
+                                        .eq('id', student.id)
+                                        .eq('user_id', user.id);
+
+                                    if (updateError) {
+                                        console.error(`更新学生 ${student.name} 状态失败:`, updateError);
+                                    } else {
+                                        // 停用缴费记录
+                                        await supabase
+                                            .from('payment_records')
+                                            .update({ status: 'inactive' })
+                                            .eq('student_id', student.id);
+                                        
+                                        // 显示通知
+                                        showToast(`学生 ${student.name} 缴费期限已过，已自动暂停`, 'warning');
+                                    }
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.error('检查缴费期限失败:', error);
+                    }
+                };
+
+                // 初始执行一次
+                checkDeadlines();
+                
+                // 每小时执行一次
+                const interval = setInterval(checkDeadlines, 3600000);
+                
+                return () => clearInterval(interval);
+            }, []);
+
             if (loading) {
                 return (
                     <div className="flex items-center justify-center h-64">
@@ -2164,6 +2234,9 @@
             const [toast, setToast] = useState(null);
             const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
             const [deletingStudentId, setDeletingStudentId] = useState(null);
+            const [showMergeConfirm, setShowMergeConfirm] = useState(false);
+            const [mergeStudents, setMergeStudents] = useState([]);
+            const [pendingStudentData, setPendingStudentData] = useState(null);
 
             const showToast = (message, type = 'success') => {
                 setToast({ message, type });
@@ -2223,6 +2296,97 @@
                 const classNumber = classMatch ? classMatch[0] : classNum;
                 
                 return `${gradeChar}-${classNumber} 班`;
+            };
+
+            // 处理合并确认
+            const handleMergeConfirm = async (shouldMerge) => {
+                setShowMergeConfirm(false);
+                
+                if (shouldMerge && mergeStudents.length > 0) {
+                    // 合并到第一个同名学生
+                    const targetStudent = mergeStudents[0];
+                    try {
+                        await handleMergeStudent(targetStudent.id, pendingStudentData);
+                    } catch (error) {
+                        console.error('合并学生失败:', error);
+                    }
+                } else if (shouldMerge === false && pendingStudentData) {
+                    // 用户选择创建新记录，继续添加学生流程
+                    await continueAddStudent(pendingStudentData);
+                }
+                // 如果 shouldMerge 为 null 或其他值（如用户点击关闭或背景），不执行任何操作
+                
+                // 清理状态
+                setMergeStudents([]);
+                setPendingStudentData(null);
+            };
+
+            // 继续添加学生（当用户选择不合并时）
+            const continueAddStudent = async (studentData) => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) throw new Error('用户未登录');
+
+                    const registrationDate = studentData.registration_date || new Date().toISOString().split('T')[0];
+                    
+                    // 根据学生类型计算缴费日期
+                    let nextRenewalDate;
+                    if (studentData.student_type === '日托') {
+                        // 日托学生：根据care_needs天数计算缴费日期
+                        const careDays = parseInt(studentData.care_needs) || 1;
+                        const startDate = new Date(registrationDate);
+                        
+                        if (careDays === 1) {
+                            // 托管1天：缴费日期为当天
+                            nextRenewalDate = registrationDate;
+                        } else {
+                            // 托管多天：计算工作日
+                            nextRenewalDate = getExtendedWorkday(registrationDate, careDays - 1);
+                        }
+                    } else {
+                        // 月托和学期学生：使用原来的月份计算
+                        nextRenewalDate = calculateNextRenewalDate(registrationDate);
+                    }
+
+                    const { data, error } = await supabase
+                        .from('students')
+                        .insert([{
+                            ...studentData,
+                            user_id: user.id,
+                            status: 'active',
+                            next_renewal_date: nextRenewalDate
+                        }])
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+                    
+                    // 先更新本地状态，确保UI立即响应
+                    setStudents([data, ...students]);
+                    
+                    // 延迟关闭表单，确保状态更新完成
+                    setTimeout(() => {
+                        setShowAddForm(false);
+                    }, 100);
+                    
+                    // 处理缴费和自动同步（异步执行，不阻塞主流程）
+                    handleStudentPaymentAndSync(data).catch(error => {
+                        console.error('同步财务和考勤记录失败:', error);
+                        // 不影响主流程，只记录错误
+                    });
+                    
+                    // 延迟触发全局刷新，确保数据一致性
+                    setTimeout(() => {
+                        refreshStudentData();
+                    }, 200);
+                    
+                    showToast('添加学生成功！', 'success');
+                } catch (error) {
+                    console.error('添加学生失败:', error);
+                    showToast('添加失败：' + error.message, 'error');
+                } finally {
+                    setSubmitting(false);
+                }
             };
 
             // 合并学生信息
@@ -2304,23 +2468,11 @@
 
                     // 如果有同名学生，询问是否合并
                     if (existingStudents && existingStudents.length > 0) {
-                        const shouldMerge = await new Promise((resolve) => {
-                            const message = `发现 ${existingStudents.length} 个同名学生：\n${existingStudents.map(s => 
-                                `- ${s.name} (${s.grade}${s.class}, 状态: ${s.status})`
-                            ).join('\n')}\n\n是否合并到现有记录？\n点击"确定"更新现有学生信息，点击"取消"创建新记录。`;
-                            
-                            if (window.confirm(message)) {
-                                resolve(true);
-                            } else {
-                                resolve(false);
-                            }
-                        });
-
-                        if (shouldMerge) {
-                            // 合并到第一个同名学生
-                            const targetStudent = existingStudents[0];
-                            return await handleMergeStudent(targetStudent.id, studentData);
-                        }
+                        setMergeStudents(existingStudents);
+                        setPendingStudentData(studentData);
+                        setShowMergeConfirm(true);
+                        setSubmitting(false);
+                        return;
                     }
 
                     const registrationDate = studentData.registration_date || new Date().toISOString().split('T')[0];
@@ -2535,9 +2687,46 @@
                 try {
                     setSubmitting(true);
                     const prev = editingStudent;
+                    
+                    // 如果修改了入学时间或学生类型，需要重新计算缴费日期
+                    let updatedData = { ...studentData };
+                    
+                    // 检查是否需要重新计算缴费日期
+                    const shouldRecalculateRenewal = 
+                        (studentData.registration_date && studentData.registration_date !== prev.registration_date) ||
+                        (studentData.student_type && studentData.student_type !== prev.student_type) ||
+                        (studentData.care_needs && studentData.care_needs !== prev.care_needs);
+                    
+                    if (shouldRecalculateRenewal) {
+                        const registrationDate = studentData.registration_date || prev.registration_date;
+                        const studentType = studentData.student_type || prev.student_type;
+                        const careNeeds = studentData.care_needs || prev.care_needs;
+                        
+                        // 根据学生类型重新计算缴费日期
+                        let nextRenewalDate;
+                        if (studentType === '日托') {
+                            // 日托学生：根据care_needs天数计算缴费日期
+                            const careDays = parseInt(careNeeds) || 1;
+                            const startDate = new Date(registrationDate);
+                            
+                            if (careDays === 1) {
+                                // 托管1天：缴费日期为当天
+                                nextRenewalDate = registrationDate;
+                            } else {
+                                // 托管多天：计算工作日
+                                nextRenewalDate = getExtendedWorkday(registrationDate, careDays - 1);
+                            }
+                        } else {
+                            // 月托和学期学生：使用原来的月份计算
+                            nextRenewalDate = calculateNextRenewalDate(registrationDate);
+                        }
+                        
+                        updatedData.next_renewal_date = nextRenewalDate;
+                    }
+                    
                     const { data, error } = await supabase
                         .from('students')
-                        .update(studentData)
+                        .update(updatedData)
                         .eq('id', editingStudent.id)
                         .select()
                         .single();
@@ -2768,6 +2957,65 @@
                     calculateDailyConsumption(student.monthly_payment, student.registration_date);
                 
                 return 0; // 移除余额计算
+            };
+
+            // 检查日托学生缴费期限，过期自动暂停
+            const checkDaycarePaymentDeadlines = async () => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) {
+                        console.error('用户未登录，无法检查缴费期限');
+                        return;
+                    }
+
+                    // 获取所有日托学生
+                    const { data: students, error } = await supabase
+                        .from('students')
+                        .select('*')
+                        .eq('user_id', user.id)
+                        .eq('student_type', '日托');
+
+                    if (error) {
+                        console.error('获取日托学生失败:', error);
+                        return;
+                    }
+
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+
+                    for (const student of students) {
+                        if (student.next_renewal_date) {
+                            const nextRenewalDate = new Date(student.next_renewal_date);
+                            nextRenewalDate.setHours(0, 0, 0, 0);
+
+                            // 如果过了缴费期限且学生状态是在读，自动暂停
+                            if (nextRenewalDate < today && student.status === 'active') {
+                                console.log(`学生 ${student.name} 缴费期限已过，自动暂停`);
+                                
+                                // 更新学生状态为暂停
+                                const { error: updateError } = await supabase
+                                    .from('students')
+                                    .update({ status: 'suspended' })
+                                    .eq('id', student.id)
+                                    .eq('user_id', user.id);
+
+                                if (updateError) {
+                                    console.error(`更新学生 ${student.name} 状态失败:`, updateError);
+                                } else {
+                                    // 停用缴费记录
+                                    await supabase
+                                        .from('payment_records')
+                                        .update({ status: 'inactive' })
+                                        .eq('student_id', student.id);
+                                    
+                                    showToast(`学生 ${student.name} 缴费期限已过，已自动暂停`, 'warning');
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('检查缴费期限失败:', error);
+                }
             };
 
             const downloadExcelTemplate = () => {
@@ -3119,6 +3367,77 @@
                                             className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
                                         >
                                             确认删除
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 同名学生合并确认对话框 */}
+                    {showMergeConfirm && (
+                        <div 
+                            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+                            onClick={(e) => {
+                                // 点击背景关闭对话框
+                                if (e.target === e.currentTarget) {
+                                    handleMergeConfirm(null);
+                                }
+                            }}
+                        >
+                            <div className="glass-morphism rounded-2xl p-6 max-w-lg w-full relative">
+                                {/* 关闭按钮 */}
+                                <button
+                                    onClick={() => handleMergeConfirm(null)}
+                                    className="absolute top-4 right-4 text-neutral-400 hover:text-neutral-600 transition-colors"
+                                >
+                                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                                
+                                <div className="text-center pr-8">
+                                    <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 mb-4">
+                                        <svg className="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-xl font-bold mb-4 text-neutral-900">发现同名学生</h3>
+                                    <p className="text-neutral-600 mb-4">
+                                        发现 {mergeStudents.length} 个同名学生，请选择操作：
+                                    </p>
+                                    <div className="bg-neutral-50 rounded-lg p-4 mb-6 max-h-40 overflow-y-auto">
+                                        {mergeStudents.map((student, index) => (
+                                            <div key={student.id} className="flex justify-between items-center py-2 border-b border-neutral-200 last:border-b-0">
+                                                <div className="text-left">
+                                                    <div className="font-medium text-neutral-900">{student.name}</div>
+                                                    <div className="text-sm text-neutral-600">
+                                                        {student.grade}{student.class} · 状态: {student.status === 'active' ? '在读' : '暂停'}
+                                                    </div>
+                                                    {student.parent && (
+                                                        <div className="text-xs text-neutral-500">
+                                                            家长: {student.parent} {student.phone && `· ${student.phone}`}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <p className="text-sm text-neutral-500 mb-6">
+                                        点击"合并"将更新现有学生信息，点击"新建"将创建新的学生记录
+                                    </p>
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={() => handleMergeConfirm(false)}
+                                            className="flex-1 px-4 py-2 bg-neutral-100 text-neutral-700 rounded-lg hover:bg-neutral-200 transition-colors"
+                                        >
+                                            新建记录
+                                        </button>
+                                        <button
+                                            onClick={() => handleMergeConfirm(true)}
+                                            className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                                        >
+                                            合并更新
                                         </button>
                                     </div>
                                 </div>
@@ -8093,7 +8412,7 @@
                     const dateForView = selectedDate || new Date().toISOString().split('T')[0];
                     const { data: activeStudentsRes } = await supabase
                         .from('students')
-                        .select('id, name, student_type, status, next_renewal_date')
+                        .select('id, name, student_type, status, next_renewal_date, created_at')
                         .eq('user_id', user.id)
                         .eq('status', 'active');
                     const activeStudents = activeStudentsRes || [];
@@ -8118,7 +8437,22 @@
                             status: 'absent',
                             synthetic: true
                         }));
-                    setAttendanceData([...formattedRecords, ...missing].sort((a, b) => a.student_name.localeCompare(b.student_name)));
+                    // 按学生创建时间排序，保持与学生管理页面相同的顺序
+                    // 学生管理页面按 created_at 降序排列，这里也采用相同的逻辑
+                    const sortedData = [...formattedRecords, ...missing].sort((a, b) => {
+                        // 通过学生姓名查找对应的学生信息
+                        const studentA = activeStudents.find(s => s.name === a.student_name);
+                        const studentB = activeStudents.find(s => s.name === b.student_name);
+                        
+                        // 如果找不到学生信息，按姓名排序
+                        if (!studentA || !studentB) {
+                            return b.student_name.localeCompare(a.student_name);
+                        }
+                        
+                        // 按创建时间降序排列（最新的在前）
+                        return new Date(studentB.created_at) - new Date(studentA.created_at);
+                    });
+                    setAttendanceData(sortedData);
                 } catch (err) {
                     console.error('获取考勤数据失败:', err);
                     setError(err.message);
@@ -12015,101 +12349,8 @@
                         </div>
                     </div>
 
-                    {/* 月缴续费配置 */}
-                    <div className="glass-morphism rounded-xl p-6">
-                        <div className="flex items-center space-x-2 mb-4">
-                            <CalendarIcon />
-                            <h3 className="text-lg font-semibold text-neutral-900">月缴续费配置</h3>
-                        </div>
-                        <p className="text-sm text-neutral-600 mb-4">配置自动续费提醒和计算规则，类似视频会员的自动续费逻辑</p>
-                        
-                        <div className="space-y-4">
-                            <div>
-                                <label className="flex items-center space-x-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={settings.enableMonthlyRenewal}
-                                        onChange={(e) => updateSystemPreference('enableMonthlyRenewal', e.target.checked)}
-                                        className="w-5 h-5 text-primary-500 border-neutral-300 rounded focus:ring-primary-500"
-                                    />
-                                    <span className="text-sm font-medium text-neutral-700">启用月缴续费功能</span>
-                                </label>
-                                <p className="text-xs text-neutral-500 mt-1 ml-7">开启后系统将自动计算下次续费日期并提前提醒</p>
-                            </div>
-
-                            {settings.enableMonthlyRenewal && (
-                                <>
-                                    <div>
-                                        <label className="block text-sm font-medium text-neutral-700 mb-2">提前提醒天数</label>
-                                        <div className="grid grid-cols-3 gap-3">
-                                            {[3, 7, 15].map((days) => (
-                                                <button
-                                                    key={days}
-                                                    onClick={() => updateSystemPreference('renewalReminderDays', days)}
-                                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                                        settings.renewalReminderDays === days
-                                                            ? 'bg-primary-500 text-white'
-                                                            : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                                                    }`}
-                                                >
-                                                    {days}天
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <p className="text-xs text-neutral-500 mt-2">在续费到期前多少天在仪表盘显示提醒</p>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-neutral-700 mb-2">续费日期计算方式</label>
-                                        <div className="space-y-2">
-                                            <label className="flex items-center space-x-2 cursor-pointer p-3 border border-neutral-200 rounded-lg hover:bg-neutral-50">
-                                                <input
-                                                    type="radio"
-                                                    name="renewalMethod"
-                                                    checked={settings.renewalCalculationMethod === 'rolling'}
-                                                    onChange={() => updateSystemPreference('renewalCalculationMethod', 'rolling')}
-                                                    className="w-4 h-4 text-primary-500 border-neutral-300 focus:ring-primary-500"
-                                                />
-                                                <div className="flex-1">
-                                                    <span className="text-sm font-medium text-neutral-900">按缴费日期滚动</span>
-                                                    <p className="text-xs text-neutral-500 mt-1">例如：11月10日缴费 → 下次12月10日</p>
-                                                </div>
-                                            </label>
-                                            <label className="flex items-center space-x-2 cursor-pointer p-3 border border-neutral-200 rounded-lg hover:bg-neutral-50">
-                                                <input
-                                                    type="radio"
-                                                    name="renewalMethod"
-                                                    checked={settings.renewalCalculationMethod === 'fixed'}
-                                                    onChange={() => updateSystemPreference('renewalCalculationMethod', 'fixed')}
-                                                    className="w-4 h-4 text-primary-500 border-neutral-300 focus:ring-primary-500"
-                                                />
-                                                <div className="flex-1">
-                                                    <span className="text-sm font-medium text-neutral-900">固定每月同一天</span>
-                                                    <p className="text-xs text-neutral-500 mt-1">例如：所有学生统一每月1日续费</p>
-                                                </div>
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                                        <div className="flex items-start space-x-2">
-                                            <InfoIcon />
-                                            <div className="flex-1">
-                                                <p className="text-sm text-blue-800">
-                                                    <span className="font-semibold">续费逻辑说明：</span>
-                                                </p>
-                                                <ul className="text-xs text-blue-700 mt-2 space-y-1">
-                                                    <li>• 系统会在学生缴费时自动计算并记录下次续费日期</li>
-                                                    <li>• 仪表盘会根据提前提醒天数显示即将到期的学生</li>
-                                                    <li>• 系统会自动处理月份天数差异（如1月31日→2月28日）</li>
-                                                </ul>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    </div>
+                    {/* 月缴续费配置 - 已默认开启，配置区域已隐藏 */}
+                    {/* 默认设置：enableMonthlyRenewal: true, renewalReminderDays: 7, renewalCalculationMethod: 'rolling' */}
 
                     {/* 操作指引 */}
                     <div className="glass-morphism rounded-xl p-6 border-2 border-primary-200 bg-primary-50">
