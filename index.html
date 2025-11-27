@@ -2231,6 +2231,41 @@
                     const { data: { user } } = await supabase.auth.getUser();
                     if (!user) throw new Error('用户未登录');
 
+                    // 检查同名学生
+                    const existingStudents = students.filter(student => 
+                        student.name === studentData.name && student.status === 'active'
+                    );
+
+                    if (existingStudents.length > 0) {
+                        // 显示确认对话框
+                        showConfirmDialog(
+                            '发现同名学生',
+                            `已找到 ${existingStudents.length} 个同名学生：\n${existingStudents.map(s => `${s.name} (${s.grade}${s.class})`).join('\n')}\n\n是否继续添加？`,
+                            async () => {
+                                // 用户确认继续添加，执行添加逻辑
+                                await performAddStudent(studentData, user);
+                            },
+                            () => {
+                                // 用户取消，不执行任何操作
+                                setSubmitting(false);
+                            }
+                        );
+                        return;
+                    }
+
+                    // 没有同名学生，直接添加
+                    await performAddStudent(studentData, user);
+                    
+                } catch (error) {
+                    console.error('添加学生失败:', error);
+                    showToast('添加失败：' + error.message, 'error');
+                    setSubmitting(false);
+                }
+            };
+
+            // 执行添加学生的核心逻辑
+            const performAddStudent = async (studentData, user) => {
+                try {
                     const registrationDate = studentData.registration_date || new Date().toISOString().split('T')[0];
                     
                     // 根据学生类型计算缴费日期
@@ -2288,6 +2323,7 @@
                 } catch (error) {
                     console.error('添加学生失败:', error);
                     showToast('添加失败：' + error.message, 'error');
+                    throw error;
                 } finally {
                     setSubmitting(false);
                 }
