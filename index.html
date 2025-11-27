@@ -7653,11 +7653,16 @@
                     // 同时结合本地撤销状态
                     const processedData = (data || []).map(record => {
                         const isLocallyUndone = locallyUndoneRecords.has(record.id);
+                        // 支持新的status字段和旧的is_undone字段
+                        const isUndone = record.status === 'cancelled' || record.is_undone || isLocallyUndone || false;
+                        const undoneAt = record.cancelled_at || record.undone_at || (isLocallyUndone ? new Date().toISOString() : null);
+                        const undoneBy = record.cancelled_by || record.undone_by || (isLocallyUndone ? user.id : null);
+                        
                         return {
                             ...record,
-                            is_undone: record.is_undone || isLocallyUndone || false,
-                            undone_at: record.undone_at || (isLocallyUndone ? new Date().toISOString() : null),
-                            undone_by: record.undone_by || (isLocallyUndone ? user.id : null)
+                            is_undone: isUndone,
+                            undone_at: undoneAt,
+                            undone_by: undoneBy
                         };
                     });
                     
@@ -7685,7 +7690,10 @@
                                 ...record,
                                 is_undone: isLocallyUndone || false,
                                 undone_at: isLocallyUndone ? new Date().toISOString() : null,
-                                undone_by: isLocallyUndone ? user.id : null
+                                undone_by: isLocallyUndone ? user.id : null,
+                                status: isLocallyUndone ? 'cancelled' : 'active',
+                                cancelled_at: isLocallyUndone ? new Date().toISOString() : null,
+                                cancelled_by: isLocallyUndone ? user.id : null
                             };
                         });
                         
@@ -7812,25 +7820,39 @@
                     // 将延期记录标记为已撤销
                     let dbUpdateSuccess = false;
                     try {
+                        // 尝试使用新的status字段（如果存在）
                         const { error: markError } = await supabase
                             .from('attendance_extensions')
                             .update({ 
-                                is_undone: true,
-                                undone_at: new Date().toISOString(),
-                                undone_by: user.id
+                                status: 'cancelled',
+                                cancelled_at: new Date().toISOString(),
+                                cancelled_by: user.id,
+                                cancel_reason: '用户撤销延期操作'
                             })
                             .eq('id', record.id);
 
                         if (markError) {
-                            console.error('标记延期记录为已撤销失败:', markError);
-                            // 如果更新失败，可能是字段不存在，尝试创建临时标记
-                            console.warn('撤销标记失败，可能是数据库字段不存在');
+                            console.error('使用status字段标记失败:', markError);
+                            // 回退到旧的is_undone字段
+                            const { error: fallbackError } = await supabase
+                                .from('attendance_extensions')
+                                .update({ 
+                                    is_undone: true,
+                                    undone_at: new Date().toISOString(),
+                                    undone_by: user.id
+                                })
+                                .eq('id', record.id);
+                            
+                            if (fallbackError) {
+                                console.error('使用is_undone字段标记也失败:', fallbackError);
+                            } else {
+                                dbUpdateSuccess = true;
+                            }
                         } else {
                             dbUpdateSuccess = true;
                         }
                     } catch (markErr) {
                         console.error('标记延期记录时发生错误:', markErr);
-                        // 即使标记失败，也不影响主要撤销功能的完成
                     }
 
                     // 如果数据库更新失败，在本地跟踪已撤销的记录
@@ -7841,6 +7863,10 @@
 
                     // 刷新延期记录
                     await fetchExtensionRecords();
+                    
+                    // 同时刷新学生数据和考勤数据，确保缴费日期更新
+                    await fetchStudents();
+                    await fetchAttendanceData();
                     
                     alert('延期操作已成功撤销！');
                     
@@ -7858,7 +7884,7 @@
                     // 获取所有在读学生（只要状态为active，就应该出现在考勤管理中）
                     const { data, error } = await supabase
                         .from('students')
-                        .select('*')
+                        .select('id, name, student_type, status, next_renewal_date')
                         .eq('user_id', user.id)
                         .eq('status', 'active')
                         .order('name');
@@ -7906,7 +7932,7 @@
                         // 获取所有在读学生（只要状态为active，就应该自动创建出勤记录）
                         const { data: eligibleStudents, error: studentsError } = await supabase
                             .from('students')
-                            .select('*')
+                            .select('id, name, student_type, status, next_renewal_date')
                             .eq('user_id', user.id)
                             .eq('status', 'active');
 
@@ -7975,7 +8001,7 @@
                     const dateForView = selectedDate || new Date().toISOString().split('T')[0];
                     const { data: activeStudentsRes } = await supabase
                         .from('students')
-                        .select('*')
+                        .select('id, name, student_type, status, next_renewal_date')
                         .eq('user_id', user.id)
                         .eq('status', 'active');
                     const activeStudents = activeStudentsRes || [];
