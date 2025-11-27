@@ -2225,6 +2225,68 @@
                 return `${gradeChar}-${classNumber} 班`;
             };
 
+            // 合并学生信息
+            const handleMergeStudent = async (studentId, newStudentData) => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) throw new Error('用户未登录');
+
+                    // 获取现有学生信息
+                    const { data: existingStudent, error: fetchError } = await supabase
+                        .from('students')
+                        .select('*')
+                        .eq('id', studentId)
+                        .eq('user_id', user.id)
+                        .single();
+
+                    if (fetchError) throw fetchError;
+
+                    // 合并数据：保留原有信息，更新新信息
+                    const mergedData = {
+                        ...existingStudent,
+                        ...newStudentData,
+                        id: studentId, // 保持原有ID
+                        user_id: user.id,
+                        status: 'active', // 激活状态
+                        updated_at: new Date().toISOString()
+                    };
+
+                    // 更新学生记录
+                    const { data, error } = await supabase
+                        .from('students')
+                        .update(mergedData)
+                        .eq('id', studentId)
+                        .eq('user_id', user.id)
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+
+                    // 更新本地状态
+                    setStudents(prev => prev.map(student => 
+                        student.id === studentId ? data : student
+                    ));
+
+                    // 关闭表单
+                    setTimeout(() => {
+                        setShowAddForm(false);
+                    }, 100);
+
+                    showToast('学生信息合并成功！', 'success');
+                    
+                    // 延迟触发全局刷新
+                    setTimeout(() => {
+                        refreshStudentData();
+                    }, 200);
+
+                    return data;
+                } catch (error) {
+                    console.error('合并学生失败:', error);
+                    showToast('合并失败：' + error.message, 'error');
+                    throw error;
+                }
+            };
+
             const handleAddStudent = async (studentData) => {
                 try {
                     setSubmitting(true);
@@ -2232,40 +2294,35 @@
                     if (!user) throw new Error('用户未登录');
 
                     // 检查同名学生
-                    const existingStudents = students.filter(student => 
-                        student.name === studentData.name && student.status === 'active'
-                    );
+                    const { data: existingStudents, error: checkError } = await supabase
+                        .from('students')
+                        .select('id, name, grade, class, status, parent, phone')
+                        .eq('name', studentData.name)
+                        .eq('user_id', user.id);
 
-                    if (existingStudents.length > 0) {
-                        // 显示确认对话框
-                        showConfirmDialog(
-                            '发现同名学生',
-                            `已找到 ${existingStudents.length} 个同名学生：\n${existingStudents.map(s => `${s.name} (${s.grade}${s.class})`).join('\n')}\n\n是否继续添加？`,
-                            async () => {
-                                // 用户确认继续添加，执行添加逻辑
-                                await performAddStudent(studentData, user);
-                            },
-                            () => {
-                                // 用户取消，不执行任何操作
-                                setSubmitting(false);
+                    if (checkError) throw checkError;
+
+                    // 如果有同名学生，询问是否合并
+                    if (existingStudents && existingStudents.length > 0) {
+                        const shouldMerge = await new Promise((resolve) => {
+                            const message = `发现 ${existingStudents.length} 个同名学生：\n${existingStudents.map(s => 
+                                `- ${s.name} (${s.grade}${s.class}, 状态: ${s.status})`
+                            ).join('\n')}\n\n是否合并到现有记录？\n点击"确定"更新现有学生信息，点击"取消"创建新记录。`;
+                            
+                            if (window.confirm(message)) {
+                                resolve(true);
+                            } else {
+                                resolve(false);
                             }
-                        );
-                        return;
+                        });
+
+                        if (shouldMerge) {
+                            // 合并到第一个同名学生
+                            const targetStudent = existingStudents[0];
+                            return await handleMergeStudent(targetStudent.id, studentData);
+                        }
                     }
 
-                    // 没有同名学生，直接添加
-                    await performAddStudent(studentData, user);
-                    
-                } catch (error) {
-                    console.error('添加学生失败:', error);
-                    showToast('添加失败：' + error.message, 'error');
-                    setSubmitting(false);
-                }
-            };
-
-            // 执行添加学生的核心逻辑
-            const performAddStudent = async (studentData, user) => {
-                try {
                     const registrationDate = studentData.registration_date || new Date().toISOString().split('T')[0];
                     
                     // 根据学生类型计算缴费日期
@@ -2323,7 +2380,6 @@
                 } catch (error) {
                     console.error('添加学生失败:', error);
                     showToast('添加失败：' + error.message, 'error');
-                    throw error;
                 } finally {
                     setSubmitting(false);
                 }
