@@ -3479,6 +3479,7 @@
             const [customPayment, setCustomPayment] = useState('');
             const [showSemesterDate, setShowSemesterDate] = useState(false);
             const [semesterDate, setSemesterDate] = useState('');
+            const [userCareDaysMemory, setUserCareDaysMemory] = useState(null); // 用户日托天数记忆
             
             // 获取系统设置
             const getSettings = () => {
@@ -3488,6 +3489,56 @@
                 } catch (e) {
                     console.error('Failed to load settings:', e);
                     return {};
+                }
+            };
+
+            // 获取用户日托天数记忆
+            const getUserCareDaysMemory = async () => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) return null;
+                    
+                    const { data, error } = await supabase
+                        .from('user_settings')
+                        .select('last_care_days')
+                        .eq('user_id', user.id)
+                        .single();
+                    
+                    if (error && error.code !== 'PGRST116') {
+                        console.error('获取用户日托天数记忆失败:', error);
+                        return null;
+                    }
+                    
+                    return data?.last_care_days || null;
+                } catch (e) {
+                    console.error('获取用户日托天数记忆出错:', e);
+                    return null;
+                }
+            };
+
+            // 保存用户日托天数记忆
+            const saveUserCareDaysMemory = async (careDays) => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) return;
+                    
+                    const { error } = await supabase
+                        .from('user_settings')
+                        .upsert({
+                            user_id: user.id,
+                            last_care_days: careDays,
+                            updated_at: new Date().toISOString()
+                        }, {
+                            onConflict: 'user_id'
+                        });
+                    
+                    if (error) {
+                        console.error('保存用户日托天数记忆失败:', error);
+                    } else {
+                        console.log('用户日托天数记忆已保存:', careDays);
+                    }
+                } catch (e) {
+                    console.error('保存用户日托天数记忆出错:', e);
                 }
             };
             
@@ -3582,6 +3633,9 @@
                         // 多天日托：计算延长的工作日
                         nextRenewal = getExtendedWorkday(new Date(), careDays - 1);
                     }
+                    
+                    // 保存日托天数记忆到数据库
+                    saveUserCareDaysMemory(careDays);
                 } else {
                     // 月托和学期学生：保持原来的月度续费逻辑
                     nextRenewal = calculateNextRenewalDate(formData.registration_date);
@@ -3741,7 +3795,24 @@
                     } catch (e) {
                     }
                 }
-            }, []);
+
+                // 加载用户日托天数记忆
+                const loadCareDaysMemory = async () => {
+                    const memoryCareDays = await getUserCareDaysMemory();
+                    if (memoryCareDays) {
+                        setUserCareDaysMemory(memoryCareDays);
+                        // 只有在添加新学生时才应用记忆值
+                        if (!student) {
+                            setFormData(prev => ({
+                                ...prev,
+                                care_needs: memoryCareDays.toString()
+                            }));
+                        }
+                    }
+                };
+                
+                loadCareDaysMemory();
+            }, [student]);
 
             return (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -4124,7 +4195,14 @@
                                     
                                     {/* 自定义天数输入 */}
                                     <div className="mb-3">
-                                        <label className="block text-xs font-medium text-blue-700 mb-1">自定义天数</label>
+                                        <label className="block text-xs font-medium text-blue-700 mb-1">
+                                            自定义天数
+                                            {userCareDaysMemory && !student && (
+                                                <span className="ml-2 text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                                                    记忆值: {userCareDaysMemory}天
+                                                </span>
+                                            )}
+                                        </label>
                                         <input
                                             type="number"
                                             value={formData.care_needs || ''}

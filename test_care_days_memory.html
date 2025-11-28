@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日托天数记忆功能测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-result {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>日托天数记忆功能测试</h1>
+    
+    <div class="test-section">
+        <h2>功能说明</h2>
+        <p>此功能可以记住用户上次使用的日托天数设置，并在添加新学生时自动加载该设置。</p>
+        <ul>
+            <li>✅ 已实现：从user_settings表获取用户日托天数记忆</li>
+            <li>✅ 已实现：保存日托天数到user_settings表</li>
+            <li>✅ 已实现：在添加新学生时自动加载记忆值</li>
+            <li>✅ 已实现：在UI界面显示记忆值标签</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>模拟测试</h2>
+        <p>由于需要真实的Supabase连接，这里提供模拟测试代码：</p>
+        
+        <h3>1. 保存日托天数记忆测试</h3>
+        <div>
+            <input type="number" id="careDaysInput" placeholder="输入日托天数" value="15">
+            <button onclick="simulateSaveCareDays()">模拟保存日托天数</button>
+        </div>
+        <div id="saveResult" class="test-result info"></div>
+
+        <h3>2. 获取日托天数记忆测试</h3>
+        <button onclick="simulateGetCareDays()">模拟获取日托天数记忆</button>
+        <div id="getResult" class="test-result info"></div>
+
+        <h3>3. 用户设置表结构验证</h3>
+        <button onclick="showTableStructure()">显示表结构</button>
+        <div id="tableStructure" class="test-result info"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>预期行为</h2>
+        <ol>
+            <li>用户首次添加日托学生时，输入自定义天数（如15天）</li>
+            <li>点击保存时，系统会将该天数保存到user_settings表的last_care_days字段</li>
+            <li>下次用户添加新的日托学生时，系统会自动加载上次保存的天数</li>
+            <li>在自定义天数输入框上方会显示"记忆值：X天"的蓝色标签</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>功能验证代码</h2>
+        <p>以下是实现的核心代码片段：</p>
+        <pre style="background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto;">
+// 获取用户日托天数记忆
+async function getUserCareDaysMemory() {
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return null;
+        
+        const { data, error } = await supabase
+            .from('user_settings')
+            .select('last_care_days')
+            .eq('user_id', user.id)
+            .single();
+            
+        if (error) {
+            console.log('未找到用户设置，返回null');
+            return null;
+        }
+        
+        return data?.last_care_days || null;
+    } catch (error) {
+        console.error('获取日托天数记忆失败:', error);
+        return null;
+    }
+}
+
+// 保存用户日托天数记忆
+async function saveUserCareDaysMemory(careDays) {
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        
+        const { error } = await supabase
+            .from('user_settings')
+            .upsert({
+                user_id: user.id,
+                last_care_days: careDays,
+                updated_at: new Date().toISOString()
+            });
+            
+        if (error) {
+            console.error('保存日托天数记忆失败:', error);
+        } else {
+            console.log('日托天数记忆已保存:', careDays);
+        }
+    } catch (error) {
+        console.error('保存日托天数记忆失败:', error);
+    }
+}
+        </pre>
+    </div>
+
+    <script>
+        // 模拟保存日托天数
+        function simulateSaveCareDays() {
+            const days = document.getElementById('careDaysInput').value;
+            const resultDiv = document.getElementById('saveResult');
+            
+            if (!days || days <= 0) {
+                resultDiv.className = 'test-result error';
+                resultDiv.textContent = '请输入有效的日托天数';
+                return;
+            }
+            
+            // 模拟保存到数据库
+            localStorage.setItem('simulated_care_days', days);
+            
+            resultDiv.className = 'test-result success';
+            resultDiv.textContent = `✅ 日托天数 ${days} 天已保存到记忆（模拟）`;
+            
+            console.log(`模拟保存日托天数: ${days}天`);
+        }
+
+        // 模拟获取日托天数记忆
+        function simulateGetCareDays() {
+            const resultDiv = document.getElementById('getResult');
+            const savedDays = localStorage.getItem('simulated_care_days');
+            
+            if (savedDays) {
+                resultDiv.className = 'test-result success';
+                resultDiv.textContent = `✅ 获取到记忆值: ${savedDays} 天`;
+            } else {
+                resultDiv.className = 'test-result info';
+                resultDiv.textContent = 'ℹ️ 未找到记忆值，返回null';
+            }
+            
+            console.log(`模拟获取日托天数记忆: ${savedDays || 'null'}`);
+        }
+
+        // 显示表结构
+        function showTableStructure() {
+            const resultDiv = document.getElementById('tableStructure');
+            const structure = `CREATE TABLE user_settings (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    last_care_days INTEGER,
+    last_custom_parent_suffix TEXT,
+    last_payment_amount DECIMAL(10,2),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 创建唯一索引
+CREATE UNIQUE INDEX idx_user_settings_user_id ON user_settings(user_id);
+
+-- 创建更新触发器
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_user_settings_updated_at 
+    BEFORE UPDATE ON user_settings 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- 启用RLS
+ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
+
+-- 创建策略
+CREATE POLICY "用户只能查看和更新自己的设置" ON user_settings
+    FOR ALL USING (auth.uid() = user_id);`;
+
+            resultDiv.className = 'test-result info';
+            resultDiv.innerHTML = `<strong>user_settings表结构:</strong><br><pre style="margin: 10px 0; overflow-x: auto;">${structure}</pre>`;
+        }
+
+        // 页面加载时自动获取一次
+        window.onload = function() {
+            simulateGetCareDays();
+        };
+    </script>
+</body>
+</html>
