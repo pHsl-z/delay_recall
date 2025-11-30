@@ -1102,7 +1102,7 @@
             const getUpcomingRenewals = () => {
                 // 从localStorage读取续费设置
                 let renewalSettings = {
-                    enableMonthlyRenewal: false,
+                    enableMonthlyRenewal: true,
                     renewalReminderDays: 7
                 };
                 try {
@@ -1396,7 +1396,7 @@
                                                 try {
                                                     const savedSettings = localStorage.getItem('systemSettings');
                                                     let settings = savedSettings ? JSON.parse(savedSettings) : {
-                                                        enableMonthlyRenewal: false,
+                                                        enableMonthlyRenewal: true,
                                                         renewalReminderDays: 7
                                                     };
                                                     
@@ -1433,7 +1433,7 @@
                                 {(() => {
                                     const upcomingRenewals = getUpcomingRenewals();
                                     const renewalSettings = {
-                                        enableMonthlyRenewal: false,
+                                        enableMonthlyRenewal: true,
                                         renewalReminderDays: 7
                                     };
                                     
@@ -1713,6 +1713,7 @@
                             mother_name: profileData.mother_name,
                             parent_phone: profileData.parent_phone,
                             care_needs: profileData.care_needs,
+                            daycare_days: profileData.daycare_days,
                             learning_status: profileData.learning_status,
                             special_notes: profileData.special_notes,
                             student_type: profileData.student_type,
@@ -2007,7 +2008,7 @@
                                     <h3 className="text-lg font-semibold text-neutral-900 mb-4">托管需求与学习情况</h3>
                                     <div className="space-y-4">
                                         <div>
-                                            <label className="block text-sm font-medium text-neutral-600 mb-1">托管需求描述</label>
+                                            <label className="block text-sm font-medium text-neutral-600 mb-1">日托需求</label>
                                             {isEditing ? (
                                                 <textarea
                                                     value={profileData.care_needs || ''}
@@ -2018,6 +2019,21 @@
                                                 />
                                             ) : (
                                                 <p className="text-neutral-900 py-2 whitespace-pre-wrap">{profileData.care_needs || '-'}</p>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-neutral-600 mb-1">日托天数</label>
+                                            {isEditing ? (
+                                                <input
+                                                    type="number"
+                                                    value={profileData.daycare_days || ''}
+                                                    onChange={(e) => setProfileData({...profileData, daycare_days: e.target.value})}
+                                                    min="0"
+                                                    placeholder="0"
+                                                    className="w-full px-3 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                                                />
+                                            ) : (
+                                                <p className="text-neutral-900 py-2">{profileData.daycare_days || 0} 天</p>
                                             )}
                                         </div>
                                         <div>
@@ -2332,8 +2348,8 @@
                     // 根据学生类型计算缴费日期
                     let nextRenewalDate;
                     if (studentData.student_type === '日托') {
-                        // 日托学生：根据care_needs天数计算缴费日期
-                        const careDays = parseInt(studentData.care_needs) || 1;
+                        // 日托学生：根据daycare_days天数计算缴费日期
+                        const careDays = parseInt(studentData.daycare_days) || 1;
                         const startDate = new Date(registrationDate);
                         
                         if (careDays === 1) {
@@ -2480,8 +2496,8 @@
                     // 根据学生类型计算缴费日期
                     let nextRenewalDate;
                     if (studentData.student_type === '日托') {
-                        // 日托学生：根据care_needs天数计算缴费日期
-                        const careDays = parseInt(studentData.care_needs) || 1;
+                        // 日托学生：根据daycare_days天数计算缴费日期
+                        const careDays = parseInt(studentData.daycare_days) || 1;
                         const startDate = new Date(registrationDate);
                         
                         if (careDays === 1) {
@@ -2654,15 +2670,15 @@
                     console.log('考勤记录创建成功:', data);
                     
                     // 如果是日托学生，更新剩余天数
-                    if (student.care_needs && parseInt(student.care_needs) > 0) {
-                        const remainingDays = parseInt(student.care_needs) - 1;
+                    if (student.daycare_days && parseInt(student.daycare_days) > 0) {
+                        const remainingDays = parseInt(student.daycare_days) - 1;
                         await supabase
                             .from('students')
-                            .update({ care_needs: String(remainingDays) }) // 使用care_needs字段存储日托天数
+                            .update({ daycare_days: String(remainingDays) }) // 使用daycare_days字段存储日托天数
                             .eq('id', student.id)
                             .eq('user_id', user.id);
                         
-                        console.log(`日托学生剩余天数更新: ${student.care_needs} → ${remainingDays}`);
+                        console.log(`日托学生剩余天数更新: ${student.daycare_days} → ${remainingDays}`);
                         
                         // 如果剩余天数为0，自动暂停
                         if (remainingDays <= 0) {
@@ -2695,18 +2711,18 @@
                     const shouldRecalculateRenewal = 
                         (studentData.registration_date && studentData.registration_date !== prev.registration_date) ||
                         (studentData.student_type && studentData.student_type !== prev.student_type) ||
-                        (studentData.care_needs && studentData.care_needs !== prev.care_needs);
+                        (studentData.daycare_days && studentData.daycare_days !== prev.daycare_days);
                     
                     if (shouldRecalculateRenewal) {
                         const registrationDate = studentData.registration_date || prev.registration_date;
                         const studentType = studentData.student_type || prev.student_type;
-                        const careNeeds = studentData.care_needs || prev.care_needs;
+                        const daycareDays = studentData.daycare_days || prev.daycare_days;
                         
                         // 根据学生类型重新计算缴费日期
                         let nextRenewalDate;
                         if (studentType === '日托') {
-                            // 日托学生：根据care_needs天数计算缴费日期
-                            const careDays = parseInt(careNeeds) || 1;
+                            // 日托学生：根据daycare_days天数计算缴费日期
+                            const careDays = parseInt(daycareDays) || 1;
                             const startDate = new Date(registrationDate);
                             
                             if (careDays === 1) {
@@ -3471,7 +3487,7 @@
                 monthly_payment: 0,
                 daily_consumption: 0,
                 student_type: '月托',
-                care_needs: '0', // 使用care_needs字段存储日托天数
+                daycare_days: '0', // 使用daycare_days字段存储日托天数
             });
             const [showCustomParentInput, setShowCustomParentInput] = useState(false);
             const [customSuffix, setCustomSuffix] = useState('');
@@ -3479,7 +3495,6 @@
             const [customPayment, setCustomPayment] = useState('');
             const [showSemesterDate, setShowSemesterDate] = useState(false);
             const [semesterDate, setSemesterDate] = useState('');
-            const [userCareDaysMemory, setUserCareDaysMemory] = useState(null); // 用户日托天数记忆
             
             // 获取系统设置
             const getSettings = () => {
@@ -3489,56 +3504,6 @@
                 } catch (e) {
                     console.error('Failed to load settings:', e);
                     return {};
-                }
-            };
-
-            // 获取用户日托天数记忆
-            const getUserCareDaysMemory = async () => {
-                try {
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (!user) return null;
-                    
-                    const { data, error } = await supabase
-                        .from('user_settings')
-                        .select('last_care_days')
-                        .eq('user_id', user.id)
-                        .single();
-                    
-                    if (error && error.code !== 'PGRST116') {
-                        console.error('获取用户日托天数记忆失败:', error);
-                        return null;
-                    }
-                    
-                    return data?.last_care_days || null;
-                } catch (e) {
-                    console.error('获取用户日托天数记忆出错:', e);
-                    return null;
-                }
-            };
-
-            // 保存用户日托天数记忆
-            const saveUserCareDaysMemory = async (careDays) => {
-                try {
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (!user) return;
-                    
-                    const { error } = await supabase
-                        .from('user_settings')
-                        .upsert({
-                            user_id: user.id,
-                            last_care_days: careDays,
-                            updated_at: new Date().toISOString()
-                        }, {
-                            onConflict: 'user_id'
-                        });
-                    
-                    if (error) {
-                        console.error('保存用户日托天数记忆失败:', error);
-                    } else {
-                        console.log('用户日托天数记忆已保存:', careDays);
-                    }
-                } catch (e) {
-                    console.error('保存用户日托天数记忆出错:', e);
                 }
             };
             
@@ -3624,8 +3589,8 @@
                 // 根据学生类型计算续费日期
                 let nextRenewal;
                 if (formData.student_type === '日托') {
-                    // 日托学生：基于care_needs天数计算续费日期
-                    const careDays = parseInt(formData.care_needs) || 1;
+                    // 日托学生：基于daycare_days天数计算续费日期
+                    const careDays = parseInt(formData.daycare_days) || 1;
                     if (careDays === 1) {
                         // 1天日托：续费日期为当天
                         nextRenewal = new Date().toISOString().split('T')[0];
@@ -3633,9 +3598,6 @@
                         // 多天日托：计算延长的工作日
                         nextRenewal = getExtendedWorkday(new Date(), careDays - 1);
                     }
-                    
-                    // 保存日托天数记忆到数据库
-                    saveUserCareDaysMemory(careDays);
                 } else {
                     // 月托和学期学生：保持原来的月度续费逻辑
                     nextRenewal = calculateNextRenewalDate(formData.registration_date);
@@ -3795,24 +3757,7 @@
                     } catch (e) {
                     }
                 }
-
-                // 加载用户日托天数记忆
-                const loadCareDaysMemory = async () => {
-                    const memoryCareDays = await getUserCareDaysMemory();
-                    if (memoryCareDays) {
-                        setUserCareDaysMemory(memoryCareDays);
-                        // 只有在添加新学生时才应用记忆值
-                        if (!student) {
-                            setFormData(prev => ({
-                                ...prev,
-                                care_needs: memoryCareDays.toString()
-                            }));
-                        }
-                    }
-                };
-                
-                loadCareDaysMemory();
-            }, [student]);
+            }, []);
 
             return (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -3839,7 +3784,7 @@
                                                 monthly_payment: dailyPrice, // 使用系统设置或默认日托费用
                                                 daily_consumption: dailyPrice, // 日托每日消费就是当日费用
                                                 balance: dailyPrice,
-                                                care_needs: '1' // 使用care_needs字段存储日托天数，默认1天
+                                                daycare_days: '1' // 使用daycare_days字段存储日托天数，默认1天
                                             }));
                                         }}
                                         className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
@@ -4154,7 +4099,7 @@
                                                 const totalAmount = days * dailyPrice;
                                                 setFormData(prev => ({
                                                     ...prev,
-                                                    care_needs: String(days), // 使用care_needs字段存储日托天数
+                                                    daycare_days: String(days), // 使用daycare_days字段存储日托天数
                                                     monthly_payment: totalAmount,
                                                     daily_consumption: dailyPrice,
                                                     balance: totalAmount
@@ -4177,7 +4122,7 @@
                                                 const totalAmount = days * dailyPrice;
                                                 setFormData(prev => ({
                                                     ...prev,
-                                                    care_needs: String(days), // 使用care_needs字段存储日托天数
+                                                    daycare_days: String(days), // 使用daycare_days字段存储日托天数
                                                     monthly_payment: totalAmount,
                                                     daily_consumption: dailyPrice,
                                                     balance: totalAmount
@@ -4195,17 +4140,10 @@
                                     
                                     {/* 自定义天数输入 */}
                                     <div className="mb-3">
-                                        <label className="block text-xs font-medium text-blue-700 mb-1">
-                                            自定义天数
-                                            {userCareDaysMemory && !student && (
-                                                <span className="ml-2 text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-                                                    记忆值: {userCareDaysMemory}天
-                                                </span>
-                                            )}
-                                        </label>
+                                        <label className="block text-xs font-medium text-blue-700 mb-1">自定义天数</label>
                                         <input
                                             type="number"
-                                            value={formData.care_needs || ''}
+                                            value={formData.daycare_days || ''}
                                             onChange={(e) => {
                                                 const settings = getSettings();
                                                 const days = parseInt(e.target.value) || 0;
@@ -4213,7 +4151,7 @@
                                                 const totalAmount = days * dailyPrice;
                                                 setFormData(prev => ({
                                                     ...prev,
-                                                    care_needs: String(days), // 使用care_needs字段存储日托天数
+                                                    daycare_days: String(days), // 使用daycare_days字段存储日托天数
                                                     monthly_payment: totalAmount,
                                                     daily_consumption: dailyPrice,
                                                     balance: totalAmount
@@ -4234,7 +4172,7 @@
                                         </div>
                                         <div className="flex justify-between items-center mt-1">
                                             <span className="text-sm text-blue-700">天数：</span>
-                                            <span className="text-lg font-semibold text-blue-800">{formData.care_needs || 0}天</span>
+                                            <span className="text-lg font-semibold text-blue-800">{formData.daycare_days || 0}天</span>
                                         </div>
                                         <div className="flex justify-between items-center mt-1 border-t border-blue-200 pt-2">
                                             <span className="text-sm font-medium text-blue-800">总计：</span>
