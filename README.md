@@ -81,6 +81,9 @@
 - [项目结构说明](PROJECT_STRUCTURE.md)
 - [配置文件说明](CONFIGURATION_GUIDE.md)
 - [测试结果与修复指南](FINAL_TEST_RESULTS_AND_FIX_GUIDE.md)
+- [日托学生使用说明](md/日托学生使用说明.md)
+- [月托学生使用说明](md/月托学生使用说明.md)
+- [学期学生使用说明](md/学期学生使用说明.md)
 
 ## 📝 许可证
 
