@@ -1134,6 +1134,39 @@
             const [upcomingHolidays, setUpcomingHolidays] = useState([]);
             const [upcomingSemesterReminders, setUpcomingSemesterReminders] = useState([]);
             
+            // 获取即将续费的学生
+            const getUpcomingRenewals = () => {
+                // 从localStorage读取续费设置
+                let renewalSettings = {
+                    enableMonthlyRenewal: true,
+                    renewalReminderDays: 3
+                };
+                try {
+                    const savedSettings = localStorage.getItem('systemSettings');
+                    if (savedSettings) {
+                        const settings = JSON.parse(savedSettings);
+                        renewalSettings = {
+                            enableMonthlyRenewal: settings.enableMonthlyRenewal || false,
+                            renewalReminderDays: settings.renewalReminderDays !== undefined ? settings.renewalReminderDays : 3
+                        };
+                    }
+                } catch (error) {
+                    console.error('读取续费设置失败:', error);
+                }
+
+                if (!renewalSettings.enableMonthlyRenewal) {
+                    return [];
+                }
+
+                return students.filter(student => {
+                    return student.next_renewal_date && 
+                           student.status === 'active' &&
+                           isRenewalDueSoon(student.next_renewal_date, renewalSettings.renewalReminderDays);
+                }).sort((a, b) => {
+                    return new Date(a.next_renewal_date) - new Date(b.next_renewal_date);
+                });
+            };
+
             // 获取学期提醒设置
             const getSemesterReminderSettings = () => {
                 const defaultSettings = {
@@ -1488,13 +1521,13 @@
                                             { days: 7, label: '7天内' }
                                         ].map((option) => {
                                             let isActive = false;
-                                            let renewalReminderDays = 7;
+                                            let renewalReminderDays = 3;
                                             
                                             try {
                                                 const savedSettings = localStorage.getItem('systemSettings');
                                                 if (savedSettings) {
                                                     const settings = JSON.parse(savedSettings);
-                                                    renewalReminderDays = settings.renewalReminderDays !== undefined ? settings.renewalReminderDays : 7;
+                                                    renewalReminderDays = settings.renewalReminderDays !== undefined ? settings.renewalReminderDays : 3;
                                                     isActive = renewalReminderDays === option.days;
                                                 }
                                             } catch (error) {}
@@ -1504,7 +1537,7 @@
                                                     const savedSettings = localStorage.getItem('systemSettings');
                                                     let settings = savedSettings ? JSON.parse(savedSettings) : {
                                                         enableMonthlyRenewal: true,
-                                                        renewalReminderDays: 7
+                                                        renewalReminderDays: 3
                                                     };
                                                     
                                                     settings.renewalReminderDays = option.days;
@@ -1533,7 +1566,7 @@
                                                     {option.label}
                                                 </button>
                                             );
-                                        })}
+                                        })
                                     </div>
                                 </div>
                                 
@@ -3918,7 +3951,7 @@
                     autumnStartDate: '09-01',
                     autumnEndDate: '01-20',
                     enableMonthlyRenewal: true,
-                    renewalReminderDays: 7,
+                    renewalReminderDays: 3,
                     quickTuitionA: 800,
                     quickTuitionB: 1000,
                     parentTitle: '家长'
